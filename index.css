@@ -1,0 +1,105 @@
+body {
+  font-family: sans-serif;
+  background: #222226;
+}
+
+html, body {
+  height: 100%;
+}
+
+section#upload {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+}
+
+.upload-button {
+  padding: 40% 40%;
+  border-radius: 4px;
+  background: #579;
+  color: #ddd;
+  transition: background 0.15s;
+}
+
+.upload-button:hover {
+  background: #68a;
+}
+
+input[type=file] {
+  display: none;
+}
+
+section#viewer {
+  display: none;
+  height: 100%;
+}
+
+.code {
+  font-family: monospace;
+  margin: 1rem;
+  color: #ccc;
+}
+
+ul {
+  list-style: none;
+  margin: 0;
+  padding-left: 2rem;
+}
+
+.object, .xref, .trailer, .startxref {
+  margin: 1rem 0;
+  padding: 1rem;
+  border-radius: 6px;
+  background: #333337;
+}
+
+.data {
+  margin: 0 1rem;
+}
+
+ul.array-items.singleline li {
+  display: inline-block;
+  margin-right: 0.3rem;
+  background-color: #2a2a33;
+  padding: 0 0.2rem;
+}
+
+.indirect-reference-object {
+  background: #4c4c5c;
+  padding: 0 0.25rem;
+}
+
+.header {
+  color: pink;
+}
+
+.dictionary-marker, .array-marker {
+  color: lightcyan;
+}
+
+.name-object {
+  color: #aaa;
+}
+
+.number-object {
+  color: lightblue;
+}
+
+.literal-string-object, .hex-string-object {
+  color: yellow;
+}
+
+.boolean-object, .null-object {
+  color: lightgreen;
+}
+
+.comment {
+  color: #bbb;
+}
+
+.explanation {
+  float: right;
+  text-align: right;
+  color: #777;
+}
