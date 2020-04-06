@@ -83,7 +83,7 @@ ul.array-items.singleline li {
 }
 
 .number-object {
-  color: lightblue;
+  color: lightgreen;
 }
 
 .literal-string-object, .hex-string-object {
@@ -91,7 +91,7 @@ ul.array-items.singleline li {
 }
 
 .boolean-object, .null-object {
-  color: lightgreen;
+  color: orange;
 }
 
 .comment {
@@ -101,5 +101,20 @@ ul.array-items.singleline li {
 .explanation {
   float: right;
   text-align: right;
+  color: #777;
+}
+
+a {
+  color: lightblue;
+}
+
+.obj-stm-header {
+}
+
+.obj-stm-object-header {
+  margin-top: 1rem;
+}
+
+.inline-explanation {
   color: #777;
 }

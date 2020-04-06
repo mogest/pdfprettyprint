@@ -5,6 +5,10 @@ const DELIMITER_AND_WHITESPACE_CHARACTERS = DELIMITER_CHARACTERS + WHITESPACE_CH
 window.addEventListener('load', () => {
   const fileElement = document.getElementById('file');
 
+  function arrayToString(array) {
+    return String.fromCharCode.apply(null, array);
+  }
+
   class PdfBuffer {
     position = 0;
 
@@ -180,7 +184,7 @@ window.addEventListener('load', () => {
     [INDIRECT_REFERENCE_OBJECT]: "indirect reference",
   };
 
-  function parseDictionary(pdf) {
+  function parseDictionary(pdf, keyContext) {
     const dictionary = [];
 
     while (true) {
@@ -196,7 +200,11 @@ window.addEventListener('load', () => {
         throw `dictionary can only have name objects for keys at position ${pdf.position}`;
       }
 
-      const value = parseObject(pdf);
+      if (!keyContext && keyToTypeMap[key.name]) {
+        keyContext = key.name;
+      }
+
+      const value = parseObject(pdf, keyContext);
 
       dictionary.push([key, value]);
     }
@@ -214,6 +222,7 @@ window.addEventListener('load', () => {
         return {type: HEX_STRING_OBJECT, string};
       }
       else {
+        console.log(c, string);
         throw `invalid character in hex string at position ${pdf.position}`;
       }
     }
@@ -276,7 +285,7 @@ window.addEventListener('load', () => {
     }
   }
 
-  function parseArray(pdf) {
+  function parseArray(pdf, keyContext) {
     const array = [];
 
     while (true) {
@@ -286,16 +295,17 @@ window.addEventListener('load', () => {
         return {type: ARRAY_OBJECT, array};
       }
 
-      const object = parseObject(pdf);
+      const object = parseObject(pdf, keyContext);
       array.push(object);
     }
   }
 
-  function parseNumberOrReference(pdf) {
+  function parseNumberOrReference(pdf, allowReference = true, keyContext) {
     let string = "";
     let dotFlag = false;
 
     string = pdf.readChar();
+    if (string == '.') { string = "0."; }
 
     while (true) {
       const c = pdf.peekChar();
@@ -310,7 +320,7 @@ window.addEventListener('load', () => {
       }
       else {
         const number = dotFlag ? parseFloat(string) : parseInt(string);
-        if (!dotFlag && number > 0 && WHITESPACE_CHARACTERS.includes(c)) {
+        if (allowReference && !dotFlag && number > 0 && WHITESPACE_CHARACTERS.includes(c)) {
           const savedPosition = pdf.position;
           pdf.skipSpaceChars();
           let generationString = '';
@@ -319,6 +329,12 @@ window.addEventListener('load', () => {
             if (WHITESPACE_CHARACTERS.includes(c)) {
               pdf.skipSpaceChars();
               if (pdf.readChar() === 'R') {
+                const typeHint = keyToTypeMap[keyContext];
+
+                if (typeHint) {
+                  objectTypeHints[number] = typeHint;
+                }
+
                 return {type: INDIRECT_REFERENCE_OBJECT, objectNumber: number, generation: parseInt(generationString)};
               }
               break;
@@ -332,6 +348,10 @@ window.addEventListener('load', () => {
             }
           }
           pdf.position = savedPosition;
+        }
+
+        if (isNaN(number)) {
+          console.log("NaN:", string);
         }
 
         return {type: NUMBER_OBJECT, number};
@@ -387,6 +407,7 @@ window.addEventListener('load', () => {
 
   function readObject(pdf) {
     const position = pdf.position;
+    // TODO : doesn't need to be a line break at the end of obj
     const objectLine = pdf.readLine().trim();
     const matches = objectLine.match(/^(\d+) (\d+) obj$/);
 
@@ -428,7 +449,7 @@ window.addEventListener('load', () => {
     }
   }
 
-  function parseObject(pdf) {
+  function parseObject(pdf, keyContext) {
     const c1 = pdf.readNonSpaceChar();
 
     switch (c1) {
@@ -436,7 +457,7 @@ window.addEventListener('load', () => {
         const c2 = pdf.peekChar();
         if (c2 === '<') {
           pdf.advance(1);
-          return parseDictionary(pdf);
+          return parseDictionary(pdf, keyContext);
         }
         else {
           return parseHexString(pdf);
@@ -469,12 +490,12 @@ window.addEventListener('load', () => {
         return parseName(pdf);
 
       case '[':
-        return parseArray(pdf);
+        return parseArray(pdf, keyContext);
     }
 
     if ("-+0123456789.".includes(c1)) {
       pdf.rewind();
-      return parseNumberOrReference(pdf);
+      return parseNumberOrReference(pdf, true, keyContext);
     }
 
     throw `unknown character ${c1} at position ${pdf.position}`;
@@ -507,8 +528,7 @@ window.addEventListener('load', () => {
 
         const rowCount = data.length / (columns + 1);
         const output = new Array(columns * rowCount);
-
-        let previousRow;
+        let outputIndex = 0;
 
         for (let rowIndex = 0; rowIndex < rowCount; rowIndex++) {
           const offsetIn = rowIndex * (columns + 1);
@@ -519,26 +539,27 @@ window.addEventListener('load', () => {
           switch (operation) {
             case 0:
               for (let column = 0; column < columns; column++) {
-                output[offsetOut + column] = row[column];
+                output[outputIndex++] = row[column];
               }
               break;
 
             case 1:
               output[offsetOut] = row[column];
               for (let column = 1; column < columns; column++) {
-                output[offsetOut + column] = (row[column] + row[column - 1]) & 0xff;
+                output[outputIndex++] = (row[column] + row[column - 1]) & 0xff;
               }
               break;
 
             case 2:
-              if (previousRow) {
+              if (rowIndex) {
+                const previousRow = output.slice((rowIndex - 1) * columns);
                 for (let column = 0; column < columns; column++) {
-                  output[offsetOut + column] = (row[column] + previousRow[column]) & 0xff;
+                  output[outputIndex++] = (row[column] + previousRow[column]) & 0xff;
                 }
               }
               else {
                 for (let column = 0; column < columns; column++) {
-                  output[offsetOut + column] = row[column];
+                  output[outputIndex++] = row[column];
                 }
               }
               break;
@@ -546,8 +567,6 @@ window.addEventListener('load', () => {
             default:
               throw `don't know how to decode predictor with operation ${operation}`;
           }
-
-          previousRow = row;
         }
 
         return new Uint8Array(output);
@@ -630,12 +649,26 @@ window.addEventListener('load', () => {
         if (xref.objectStreamFlag) {
           const {object, stream} = findObject(pdf, xref.number);
           const n = extractNumber(findValueByKey(object, 'N'));
-          const first = extractNumber(firstValueByKey(object, 'First'));
+          const first = extractNumber(findValueByKey(object, 'First'));
 
           const contents = String.fromCharCode.apply(null, stream.slice(0, first)).split(/\s+/);
-          const offset = contents[xref.index * 2 + 1];
+          let offset;
+          if (xref.index > 0) {
+            offset = parseInt(contents[xref.index * 2 + 1]);
+          }
+          else {
+            for (let i = 0; i < n; i++) {
+              if (parseInt(contents[i * 2]) === objectNumber) {
+                offset = parseInt(contents[i * 2 + 1]);
+              }
+            }
+          }
 
-          const streamPdf = new PdfBuffer(stream.slice(first + offset));
+          if (typeof offset === 'undefined') {
+            throw `Couldn't find the offset for object number ${objectNumber} in object stream ${xref.number}`;
+          }
+
+          const streamPdf = new PdfBuffer(stream.subarray(first + offset));
           return parseObject(streamPdf);
         }
         else if (xref.inUseFlag) {
@@ -648,6 +681,109 @@ window.addEventListener('load', () => {
 
         return {type: NULL_OBJECT};
       }
+    }
+  }
+
+  function parseObjStm({object, stream}) {
+    const n = extractNumber(findValueByKey(object, 'N'));
+    const first = extractNumber(findValueByKey(object, 'First'));
+
+    const headerLine = String.fromCharCode.apply(null, stream.slice(0, first));
+    const regexp = RegExp('\\s*(\\d+)\\s+(\\d+)', 'g')
+    let match;
+    const header = [];
+
+    while ((match = regexp.exec(headerLine)) !== null) {
+      header.push({number: parseInt(match[1]), offset: parseInt(match[2])});
+    }
+
+    const streamPdf = new PdfBuffer(stream.subarray(first));
+    const objects = [];
+
+    while (!streamPdf.eof()) {
+      objects.push(parseObject(streamPdf));
+      streamPdf.skipSpaceChars();
+    }
+
+    return {header, headerLine, objects};
+  }
+
+  function renderObjStm({object, stream}) {
+    const {header, headerLine, objects} = parseObjStm({object, stream});
+
+    let html = `
+      <div class="inline-explanation">% Pairs of numbers: the object number and its offset in this stream</div>
+      <div class="obj-stm-header">${headerLine}</div>
+    `;
+
+    for (const {number, offset} of header) {
+      html += `
+        <a id="object${number}x0">
+        <div class="obj-stm-object-header inline-explanation">% Object ${number} at offset ${offset}</div>
+        ${renderObject(objects.shift())}
+        </a>
+      `;
+    }
+
+    return `<div class="data">${html}</div>`;
+  }
+
+  function renderGraphicsObject(stream) {
+    const streamPdf = new PdfBuffer(stream);
+
+    let html = '';
+    let args = [];
+
+    try {
+      while (!streamPdf.eof()) {
+        const c = streamPdf.readNonSpaceChar();
+
+        switch (c) {
+          case '<':
+            const c2 = streamPdf.peekChar();
+            if (c2 === '<') {
+              streamPdf.advance(1);
+              args.push(parseDictionary(streamPdf));
+            }
+            else {
+              args.push(parseHexString(streamPdf));
+            }
+            break;
+
+          case '/':
+            args.push(parseName(streamPdf));
+            break;
+
+          case '(':
+            args.push(parseLiteralString(streamPdf));
+            break;
+
+          default:
+            streamPdf.rewind();
+
+            if ("0123456789-+.".includes(c)) {
+              args.push(parseNumberOrReference(streamPdf, false));
+            }
+            else {
+              const command = streamPdf.readKeyword();
+              const argsHtml = args.map(a => renderObject(a)).join(" ");
+              args = [];
+
+              html += `<li>${argsHtml} <span class="command">${command}</span></li>`;
+            }
+        }
+      }
+
+      return `<ul class="graphics-objects">${html}</ul>`;
+    }
+    catch (e) {
+      console.error(e);
+      return `
+        <div class="inline-explanation">% Couldn't parse this graphics object data, showing without pretty printing
+        <div class="data">
+          ${h(arrayToString(stream))}
+        </div>
+      `;
     }
   }
 
@@ -707,7 +843,7 @@ window.addEventListener('load', () => {
         return `<span class="number-object">${object.number}</span>`;
 
       case INDIRECT_REFERENCE_OBJECT:
-        return `<span class="indirect-reference-object">${object.objectNumber} ${object.generation} R</span>`;
+        return `<span class="indirect-reference-object"><a href="#object${object.objectNumber}x${object.generation}">${object.objectNumber} ${object.generation} R</a></span>`;
 
       default:
         return `<span class="unknown-object">unknown object</span>`;
@@ -773,17 +909,22 @@ window.addEventListener('load', () => {
           line = `object ${objectNumber} is not in use; next free object at ${xref.offset}, next generation will be ${xref.generation}`;
         }
         else if (!xref.objectStreamFlag) {
-          line = `object ${objectNumber} is at offset ${xref.offset} in generation ${xref.generation}`;
+          line = `object ${objectNumber} is at <a href="#offset${xref.offset}">offset ${xref.offset}</a> in generation ${xref.generation}`;
         }
         else {
-          line = `object ${objectNumber} is inside object stream ${xref.number} at index ${xref.index}`;
+          line = `object ${objectNumber} is inside <a href="#object${xref.number}x0">object stream ${xref.number}</a> at index ${xref.index}`;
         }
 
         html += `<li>${line}</li>`;
         objectNumber++;
       }
 
-      return `<ul class="xref-stream">${html}</ul>`;
+      return `
+        <ul class="xref-stream">
+          <li class="inline-explanation">% XRef streams are stored as binary data.  Following is an interpretation of that data:</li>
+          ${html}
+        </ul>
+      `;
     }
     catch (e) {
       return '<div class="error">error parsing XRef stream data</div>';
@@ -798,6 +939,13 @@ window.addEventListener('load', () => {
     const code = document.querySelector('section#viewer .code');
     code.appendChild(div);
   }
+
+  const keyToTypeMap = {
+    Contents: 'Content',
+    XObject: 'XObject',
+  };
+
+  const objectTypeHints = {};
 
   document.querySelector('input').addEventListener('change', () => {
     const reader = new FileReader();
@@ -816,8 +964,6 @@ window.addEventListener('load', () => {
         throw "Not a PDF 1.x file";
       }
       pdfVersion = match[1];
-
-      console.log('PDF version', pdfVersion);
 
       pdf.seekToEnd();
       const lastLine = pdf.readLineBackwards();
@@ -891,9 +1037,9 @@ window.addEventListener('load', () => {
           const {number, generation, object, stream, position} = readObject(pdf);
 
           const TYPE_DESCRIPTIONS = {
-            Catalog: 'The Catalog object is used at the root of the document and points to the pages',
-            Pages: 'The Pages object points to the pages in this document',
-            Page: 'The Page object sets up the resources for a page and points to its content',
+            Catalog: 'The Catalog object sits at the root of the document and points to its pages object',
+            Pages: 'The Pages object points to the individual pages in this document',
+            Page: 'The Page object sets up the resources for a page and points to its graphical content',
             XRef: 'The XRef object provides a lookup table for objects so they can be quickly found',
             ObjStm: 'The ObjStm (object stream) object contains multiple objects compressed in its stream data',
             XObject: 'The XObject object holds graphics content that can be reused multiple times',
@@ -909,8 +1055,10 @@ window.addEventListener('load', () => {
           }
 
           let html = `
+            <a id="offset${position}"></a>
+            <a id="object${number}x${generation}"></a>
             <div class="explanation">
-              Define an object: number ${number}, generation ${generation}, at offset ${position}
+              Define object number ${number}, generation ${generation}, at offset ${position}
               ${objectDescription}
             </div>
             <div class="header object-header">
@@ -927,11 +1075,17 @@ window.addEventListener('load', () => {
             if (dictionaryType === 'XRef') {
               html += renderXrefStream({object, stream});
             }
-            else if (stream.some(x => x > 127)) {
-              html += `<div class="stream-placeholder data">${stream.length} bytes of binary data</div>`;
+            else if (dictionaryType === 'ObjStm') {
+              html += renderObjStm({object, stream});
             }
-            else if (stream.length > 16 * 1024) {
-              html += `<div class="stream-placeholder data">${stream.length} bytes of text data</div>`;
+            else if (['Content', 'XObject'].includes(dictionaryType || objectTypeHints[number])) {
+              html += renderGraphicsObject(stream);
+            }
+            else if (stream.some(x => x > 127)) {
+              html += `<div class="stream-placeholder data">[ ${stream.length} bytes of binary data ]</div>`;
+            }
+            else if (stream.length > 32 * 1024) {
+              html += `<div class="stream-placeholder data">[ ${stream.length} bytes of text data ]</div>`;
             }
             else {
               html += `<div class="data stream-data">${h(String.fromCharCode.apply(null, stream))}</div>`;
@@ -948,6 +1102,19 @@ window.addEventListener('load', () => {
         }
         else if (c === '%') {
           const comment = pdf.readLine();
+
+          let matches;
+          matches = comment.match(/^%PDF-([0-9.]+)$/);
+          if (matches) {
+            render('explanation', `This is a PDF version ${matches[1]} compliant file`);
+          }
+          else if (comment.match(/^%[\x80-\xff]{4}$/)) {
+            render('explanation', 'This comment marks that there is binary data contained in this file');
+          }
+          else if (comment === '%%EOF') {
+            render('explanation', 'This marks the end of the document, although may be appended to after this point with more PDF content');
+          }
+
           render('comment', h(comment));
         }
         else {
@@ -993,9 +1160,12 @@ window.addEventListener('load', () => {
             case 'startxref':
               const startxref = parseObject(pdf);
               html = `
+                <div class="explanation">Points to the last cross-reference table which stores object offsets</div>
                 <div class="header startxref-header">startxref</div>
                 <div class="data startxref-data">
-                  ${renderObject(startxref)}
+                  <a href="#offset${startxref.number}">
+                    ${renderObject(startxref)}
+                  </a>
                 </div>
               `;
               render('startxref', html);
