@@ -10,15 +10,19 @@ window.addEventListener('load', () => {
   }
 
   class PdfBuffer {
-    position = 0;
+    offset = 0;
 
     constructor(array) {
       this.array = array;
       this.length = this.array.length;
     }
 
+    getOffset() {
+      return this.offset;
+    }
+
     eof() {
-      return this.position >= this.length;
+      return this.offset >= this.length;
     }
 
     readLine() {
@@ -29,7 +33,7 @@ window.addEventListener('load', () => {
         c = this.readChar();
 
         if (c === "\r") {
-          if (this.peekChar() === '\n') { this.position++; }
+          if (this.peekChar() === '\n') { this.offset++; }
           break;
         }
         if (c === "\n") {
@@ -46,8 +50,8 @@ window.addEventListener('load', () => {
     readLineBackwards() {
       let c, line = '';
 
-      while (WHITESPACE_CHARACTERS.includes(this.peekChar()) && this.position) {
-        this.position--;
+      while (WHITESPACE_CHARACTERS.includes(this.peekChar()) && this.offset) {
+        this.offset--;
       }
 
       do {
@@ -58,9 +62,9 @@ window.addEventListener('load', () => {
         }
 
         line = c + line;
-        this.position--;
+        this.offset--;
       }
-      while (c && this.position);
+      while (c && this.offset);
 
       return line;
     }
@@ -68,8 +72,8 @@ window.addEventListener('load', () => {
     readBytes(count) {
       if (this.eof()) { return; }
 
-      const subarray = this.array.subarray(this.position, this.position + count);
-      this.position += count;
+      const subarray = this.array.subarray(this.offset, this.offset + count);
+      this.offset += count;
       return subarray;
     }
 
@@ -77,7 +81,7 @@ window.addEventListener('load', () => {
       let number = 0;
 
       while (bytes--) {
-        number = (number << 8) | this.array[this.position++];
+        number = (number << 8) | this.array[this.offset++];
       }
 
       return number;
@@ -86,7 +90,7 @@ window.addEventListener('load', () => {
     readChar() {
       if (this.eof()) { return; }
 
-      const c = this.array[this.position++];
+      const c = this.array[this.offset++];
       return String.fromCharCode(c);
     }
 
@@ -98,7 +102,7 @@ window.addEventListener('load', () => {
         c = this.readChar();
         if (DELIMITER_AND_WHITESPACE_CHARACTERS.includes(c)) {
           if (c === '\r' && this.peekChar() === '\n') {
-            this.position++;
+            this.offset++;
           }
           break;
         }
@@ -115,7 +119,7 @@ window.addEventListener('load', () => {
         if (!WHITESPACE_CHARACTERS.includes(c)) {
           return c;
         }
-        this.position++;
+        this.offset++;
       }
       while (c);
     }
@@ -132,30 +136,30 @@ window.addEventListener('load', () => {
     }
 
     peekChar() {
-      if (!this.eof()) { return String.fromCharCode(this.array[this.position]); }
+      if (!this.eof()) { return String.fromCharCode(this.array[this.offset]); }
     }
 
     peekChars(count) {
       if (!this.eof()) {
-        const subarray = this.array.subarray(this.position, this.position + count);
+        const subarray = this.array.subarray(this.offset, this.offset + count);
         return String.fromCharCode.apply(null, subarray);
       }
     }
 
     advance(count) {
-      this.position += count;
+      this.offset += count;
     }
 
     rewind() {
-      this.position--;
+      this.offset--;
     }
 
     seek(to) {
-      this.position = to;
+      this.offset = to;
     }
 
     seekToEnd() {
-      this.position = this.length - 1;
+      this.offset = this.length - 1;
     }
   }
 
@@ -197,7 +201,7 @@ window.addEventListener('load', () => {
 
       const key = parseObject(pdf);
       if (key.type !== NAME_OBJECT) {
-        throw `dictionary can only have name objects for keys at position ${pdf.position}`;
+        throw `dictionary can only have name objects for keys at offset ${pdf.offset}`;
       }
 
       if (!keyContext && keyToTypeMap[key.name]) {
@@ -223,7 +227,7 @@ window.addEventListener('load', () => {
       }
       else {
         console.log(c, string);
-        throw `invalid character in hex string at position ${pdf.position}`;
+        throw `invalid character in hex string at offset ${pdf.offset}`;
       }
     }
   }
@@ -321,7 +325,7 @@ window.addEventListener('load', () => {
       else {
         const number = dotFlag ? parseFloat(string) : parseInt(string);
         if (allowReference && !dotFlag && number > 0 && WHITESPACE_CHARACTERS.includes(c)) {
-          const savedPosition = pdf.position;
+          const savedOffset = pdf.offset;
           pdf.skipSpaceChars();
           let generationString = '';
           while (true) {
@@ -347,7 +351,7 @@ window.addEventListener('load', () => {
               break;
             }
           }
-          pdf.position = savedPosition;
+          pdf.seek(savedOffset);
         }
 
         if (isNaN(number)) {
@@ -378,7 +382,7 @@ window.addEventListener('load', () => {
   function readStream(pdf, dictionary) {
     const streamLength = extractNumber(dereference(pdf, findValueByKey(dictionary, 'Length')));
     if (!streamLength) {
-      throw `no Length key in dictionary before stream at ${pdf.position}`;
+      throw `no Length key in dictionary before stream at ${pdf.offset}`;
     }
 
     const filter = findValueByKey(dictionary, 'Filter');
@@ -393,7 +397,7 @@ window.addEventListener('load', () => {
     const endstreamLine = pdf.readKeyword();
     if (endstreamLine !== 'endstream') {
       console.log('endstream was', endstreamLine.charCodeAt(0));
-      throw `expecting endstream and didn't get it at position ${pdf.position}`;
+      throw `expecting endstream and didn't get it at offset ${pdf.offset}`;
     }
 
     const filtered = filterChain.reduce(applyFilter, streamData);
@@ -406,20 +410,20 @@ window.addEventListener('load', () => {
   }
 
   function readObject(pdf) {
-    const position = pdf.position;
+    const offset = pdf.offset;
     // TODO : doesn't need to be a line break at the end of obj
     const objectLine = pdf.readLine().trim();
     const matches = objectLine.match(/^(\d+) (\d+) obj$/);
 
     if (!matches) {
       console.error(line);
-      throw `invalid object header line at position ${pdf.position}`;
+      throw `invalid object header line at offset ${pdf.offset}`;
     }
 
     const [_, number, generation] = matches;
 
     const object = parseObject(pdf);
-    let stream;
+    let stream, streamOffset;
 
     pdf.skipSpaceChars();
     if (object.type === DICTIONARY_OBJECT && pdf.peekChars(6) === 'stream') {
@@ -430,13 +434,14 @@ window.addEventListener('load', () => {
         c = pdf.readChar();
       }
       if (c !== '\n') {
-        throw `stream keyword must be followed by either a line feed or a carriage return and line feed at position ${pdf.position}`;
+        throw `stream keyword must be followed by either a line feed or a carriage return and line feed at offset ${pdf.offset}`;
       }
 
+      streamOffset = pdf.offset;
       stream = readStream(pdf, object);
     }
 
-    return {number, generation, object, stream, position};
+    return {number, generation, object, stream, offset, streamOffset};
   }
 
   function findValueByKey(object, keyName) {
@@ -498,7 +503,7 @@ window.addEventListener('load', () => {
       return parseNumberOrReference(pdf, true, keyContext);
     }
 
-    throw `unknown character ${c1} at position ${pdf.position}`;
+    throw `unknown character ${c1} at offset ${pdf.offset}`;
   }
 
   function applyFilter(data, filter) {
@@ -591,7 +596,7 @@ window.addEventListener('load', () => {
       const header = pdf.readLine();
       const matches = header.match(/^(\d+) (\d+)$/);
       if (!matches) {
-        throw `invalid xref header at position ${pdf.position}`;
+        throw `invalid xref header at offset ${pdf.offset}`;
       }
 
       const [_, startObject, count] = matches.map(n => parseInt(n));
@@ -604,10 +609,10 @@ window.addEventListener('load', () => {
         const line = pdf.readLine();
         const matches = line.match(/^(\d{10}) (\d{5}) ([fn])\s*$/);
         if (!matches) {
-          throw `invalid xref line at position ${pdf.position}`;
+          throw `invalid xref line at offset ${pdf.offset}`;
         }
 
-        subsection.xrefs.push({offset: matches[1], generation: matches[2], inUseFlag: matches[3]});
+        subsection.xrefs.push({offset: matches[1], generation: matches[2], inUseFlag: matches[3] === 'n'});
       }
 
       xrefs.push(subsection);
@@ -672,10 +677,10 @@ window.addEventListener('load', () => {
           return parseObject(streamPdf);
         }
         else if (xref.inUseFlag) {
-          const originalPosition = pdf.position;
+          const originalOffset = pdf.offset;
           pdf.seek(xref.offset);
           const object = readObject(pdf);
-          pdf.seek(originalPosition);
+          pdf.seek(originalOffset);
           return object;
         }
 
@@ -947,236 +952,271 @@ window.addEventListener('load', () => {
 
   const objectTypeHints = {};
 
-  document.querySelector('input').addEventListener('change', () => {
+  function validateFileHeader(pdf) {
+    pdf.seek(0);
+    line = pdf.readLine();
+    const match = line.match(/^%PDF-(1\.\d+)$/);
+    if (!match) {
+      throw "Not a PDF 1.x file";
+    }
+  }
+
+  function getStartxref(pdf) {
+    pdf.seekToEnd();
+    const lastLine = pdf.readLineBackwards();
+    if (lastLine !== '%%EOF') {
+      console.log('last line is', lastLine);
+      throw "Doesn't end with %%EOF";
+    }
+
+    let startxref = parseInt(pdf.readLineBackwards());
+    const startxrefkeyword = pdf.readLineBackwards();
+
+    if (startxrefkeyword !== 'startxref') {
+      throw "Couldn't find startxref keyword on the third-to-last line of PDF file";
+    }
+
+    if (startxref < 1) {
+      throw "Invalid startxref number";
+    }
+  }
+
+  function loadXrefTables(pdf, startxref) {
+    const table = [];
+
+    while (startxref) {
+      pdf.seek(startxref);
+
+      const c = pdf.peekChar();
+      if (c === 'x') {
+        if (pdf.readLine() != 'xref') {
+          throw `expecting xref keyword at ${startxref} but couldn't find it`;
+        }
+        const xref = parseXref(pdf);
+        table = table.concat(xref);
+
+        if (pdf.readLine() != 'trailer') {
+          throw `expecting trailer keyword at ${pdf.offset} but couldn't find it`;
+        }
+        const trailer = parseObject(pdf);
+        startxref = extractNumber(findValueByKey(trailer, 'Prev'));
+      }
+      else if ("123456789".includes(c)) {
+        const {object, stream} = readObject(pdf);
+
+        if (object.type !== DICTIONARY_OBJECT) {
+          throw `xref objects must be dictionaries`;
+        }
+
+        if (extractName(findValueByKey(object, 'Type')) !== 'XRef') {
+          throw 'object pointed to by xrefstart/Prev does not have type XRef';
+        }
+
+        const {xrefs, prev} = parseXrefStream({object, stream});
+        table.push(xrefs);
+
+        startxref = prev;
+      }
+      else {
+        throw `need an xref keyword or xref object at offset ${pdf.offset}`;
+      }
+    }
+
+    return table;
+  }
+
+  function renderStream({object, stream, type}) {
+    let html = '<div class="header stream-header">stream</div>';
+
+    if (type === 'XRef') {
+      html += renderXrefStream({object, stream});
+    }
+    else if (type === 'ObjStm') {
+      html += renderObjStm({object, stream});
+    }
+    else if (['Content', 'XObject'].includes(type)) {
+      html += renderGraphicsObject(stream);
+    }
+    else if (stream.some(x => x > 127)) {
+      html += `<div class="stream-placeholder data">[ ${stream.length} bytes of binary data ]</div>`;
+    }
+    else if (stream.length > 32 * 1024) {
+      html += `<div class="stream-placeholder data">[ ${stream.length} bytes of text data ]</div>`;
+    }
+    else {
+      html += `<div class="data stream-data">${h(String.fromCharCode.apply(null, stream))}</div>`;
+    }
+
+    return html;
+  }
+
+  function renderObjectTypeExplanation(type) {
+    const description = TYPE_DESCRIPTIONS[type];
+    if (description) {
+      return `<div>${description}</div>`;
+    }
+  }
+
+  const TYPE_DESCRIPTIONS = {
+    Catalog: 'The Catalog object sits at the root of the document and points to its pages object',
+    Pages: 'The Pages object points to the individual pages in this document',
+    Page: 'The Page object sets up the resources for a page and points to its graphical content',
+    XRef: 'The XRef object provides a lookup table for objects so they can be quickly found',
+    ObjStm: 'The ObjStm (object stream) object contains multiple objects compressed in its stream data',
+    XObject: 'The XObject object holds graphics content that can be reused multiple times',
+    Content: 'This object contains graphical content',
+  };
+
+  const unidentifiedObjects = [];
+
+  function displayPDF(filename, array) {
+    const pdf = new PdfBuffer(array);
+
+    document.querySelector('section#upload').style.display = 'none';
+    document.querySelector('section#viewer').style.display = 'block';
+    document.querySelector('#filename').innerText = filename;
+
+    const startxref = getStartxref(pdf);
+    pdf.xrefTable = loadXrefTables(pdf, startxref);
+
+    pdf.seek(0);
+
+    while (!pdf.eof()) {
+      pdf.skipSpaceChars();
+      const c = pdf.peekChar();
+
+      let objectDescription = '';
+      if ("0123456789".includes(c)) {
+        const {number, generation, object, stream, offset, streamOffset} = readObject(pdf);
+
+        let dictionaryType;
+        if (object.type === DICTIONARY_OBJECT) {
+          dictionaryType = extractName(dereference(pdf, findValueByKey(object, 'Type')));
+        }
+        if (!dictionaryType) { dictionaryType = objectTypeHints[number]; }
+
+        if (!dictionaryType) {
+          unidentifiedObjects.push({number, offset, streamOffset});
+        }
+
+        let html = `
+          <a id="offset${offset}"></a>
+          <a id="object${number}x${generation}"></a>
+          <div class="explanation">
+            Define object number ${number}, generation ${generation}, at offset ${offset}
+            ${renderObjectTypeExplanation(dictionaryType)}
+          </div>
+          <div class="header object-header">
+            ${number} ${generation} obj
+          </div>
+          <div class="object-data">
+            ${renderObject(object)}
+          </div>
+        `;
+
+        if (stream) {
+          html += renderStream({object, stream, type: dictionaryType});
+        }
+
+        html += `
+          <div class="header object-footer">
+            endobj
+          </div>
+        `;
+
+        render('object', html);
+      }
+      else if (c === '%') {
+        const comment = pdf.readLine();
+
+        let matches;
+        matches = comment.match(/^%PDF-([0-9.]+)$/);
+        if (matches) {
+          render('explanation', `This is a PDF version ${matches[1]} compliant file`);
+        }
+        else if (comment.match(/^%[\x80-\xff]{4}$/)) {
+          render('explanation', 'This comment marks that there is binary data contained in this file');
+        }
+        else if (comment === '%%EOF') {
+          render('explanation', 'This marks the end of the document, although may be appended to after this point with more PDF content');
+        }
+
+        render('comment', h(comment));
+      }
+      else {
+        const keyword = pdf.readKeyword();
+        let html;
+
+        switch (keyword) {
+          case 'endobj':
+            break;
+
+          case 'xref':
+            const table = parseXref(pdf);
+            let xrefHtml = '';
+            for (const {startObject, count, xrefs} of table) {
+              xrefHtml += `<div class="xref-section-header">${startObject} ${count}</div><ul class="xref-section">`;
+              for (const {offset, generation, inUseFlag} of xrefs) {
+                if (inUseFlag) {
+                  xrefHtml += `<li><a href="#offset${offset.replace(/^0+/, '')}">${offset}</a> ${generation} n`;
+                }
+                else {
+                  xrefHtml += `<li>${offset} ${generation} f`;
+                }
+              }
+              xrefHtml += '</ul>';
+            }
+
+            html = `
+              <div class="header xref-header">xref</div>
+              <div class="data xref-data">
+              ${xrefHtml}
+              </div>
+            `;
+
+            render('xref', html);
+            break;
+
+          case 'trailer':
+            const trailer = parseObject(pdf);
+            html = `
+              <div class="header trailer-header">trailer</div>
+              <div class="data trailer-data">
+                ${renderObject(trailer)}
+              </div>
+            `;
+            render('trailer', html);
+            break;
+
+          case 'startxref':
+            const startxref = parseObject(pdf);
+            html = `
+              <div class="explanation">Points to the last cross-reference table which stores object offsets</div>
+              <div class="header startxref-header">startxref</div>
+              <div class="data startxref-data">
+                <a href="#offset${startxref.number}">
+                  ${renderObject(startxref)}
+                </a>
+              </div>
+            `;
+            render('startxref', html);
+            break;
+
+          default:
+            throw `unknown keyword ${keyword} at offset ${pdf.offset}`;
+        }
+      }
+    }
+
+    console.log('--success--');
+  }
+
+  document.querySelector('input').addEventListener('change', event => {
+    const filename = event.target.files[0].name;
     const reader = new FileReader();
 
-    let pdfVersion;
-    let binaryMarker = false;
-
     reader.onload = function() {
-      const pdf = new PdfBuffer(new Uint8Array(this.result));
-
-      let line;
-
-      line = pdf.readLine();
-      const match = line.match(/^%PDF-(1\.\d+)$/);
-      if (!match) {
-        throw "Not a PDF 1.x file";
-      }
-      pdfVersion = match[1];
-
-      pdf.seekToEnd();
-      const lastLine = pdf.readLineBackwards();
-      if (lastLine !== '%%EOF') {
-        console.log('last line is', lastLine);
-        throw "Doesn't end with %%EOF";
-      }
-
-      let startxref = parseInt(pdf.readLineBackwards());
-      const startxrefkeyword = pdf.readLineBackwards();
-
-      if (startxrefkeyword !== 'startxref') {
-        throw "Couldn't find startxref keyword on the third-to-last line of PDF file";
-      }
-
-      if (startxref < 1) {
-        throw "Invalid startxref number";
-      }
-
-      pdf.xrefTable = [];
-
-      while (startxref) {
-        pdf.seek(startxref);
-
-        const c = pdf.peekChar();
-        if (c === 'x') {
-          if (pdf.readLine() != 'xref') {
-            throw `expecting xref keyword at ${startxref} but couldn't find it`;
-          }
-          const xref = parseXref(pdf);
-          pdf.xrefTable = pdf.xrefTable.concat(xref);
-
-          if (pdf.readLine() != 'trailer') {
-            throw `expecting trailer keyword at ${pdf.position} but couldn't find it`;
-          }
-          const trailer = parseObject(pdf);
-          startxref = extractNumber(findValueByKey(trailer, 'Prev'));
-        }
-        else if ("123456789".includes(c)) {
-          const {object, stream} = readObject(pdf);
-
-          if (object.type !== DICTIONARY_OBJECT) {
-            throw `xref objects must be dictionaries`;
-          }
-
-          if (extractName(findValueByKey(object, 'Type')) !== 'XRef') {
-            throw 'object pointed to by xrefstart/Prev does not have type XRef';
-          }
-
-          const {xrefs, prev} = parseXrefStream({object, stream});
-          pdf.xrefTable.push(xrefs);
-
-          startxref = prev;
-        }
-        else {
-          throw `need an xref keyword or xref object at offset ${pdf.position}`;
-        }
-      }
-
-      document.querySelector('section#upload').style.display = 'none';
-      document.querySelector('section#viewer').style.display = 'block';
-
-      pdf.seek(0);
-
-      while (!pdf.eof()) {
-        pdf.skipSpaceChars();
-        const c = pdf.peekChar();
-
-        let objectDescription = '';
-        if ("0123456789".includes(c)) {
-          const {number, generation, object, stream, position} = readObject(pdf);
-
-          const TYPE_DESCRIPTIONS = {
-            Catalog: 'The Catalog object sits at the root of the document and points to its pages object',
-            Pages: 'The Pages object points to the individual pages in this document',
-            Page: 'The Page object sets up the resources for a page and points to its graphical content',
-            XRef: 'The XRef object provides a lookup table for objects so they can be quickly found',
-            ObjStm: 'The ObjStm (object stream) object contains multiple objects compressed in its stream data',
-            XObject: 'The XObject object holds graphics content that can be reused multiple times',
-          };
-
-          let dictionaryType;
-          if (object.type === DICTIONARY_OBJECT) {
-            dictionaryType = extractName(dereference(pdf, findValueByKey(object, 'Type')));
-            const description = TYPE_DESCRIPTIONS[dictionaryType];
-            if (description) {
-              objectDescription = `<div>${description}</div>`;
-            }
-          }
-
-          let html = `
-            <a id="offset${position}"></a>
-            <a id="object${number}x${generation}"></a>
-            <div class="explanation">
-              Define object number ${number}, generation ${generation}, at offset ${position}
-              ${objectDescription}
-            </div>
-            <div class="header object-header">
-              ${number} ${generation} obj
-            </div>
-            <div class="object-data">
-              ${renderObject(object)}
-            </div>
-          `;
-
-          if (stream) {
-            html += '<div class="header stream-header">stream</div>';
-
-            if (dictionaryType === 'XRef') {
-              html += renderXrefStream({object, stream});
-            }
-            else if (dictionaryType === 'ObjStm') {
-              html += renderObjStm({object, stream});
-            }
-            else if (['Content', 'XObject'].includes(dictionaryType || objectTypeHints[number])) {
-              html += renderGraphicsObject(stream);
-            }
-            else if (stream.some(x => x > 127)) {
-              html += `<div class="stream-placeholder data">[ ${stream.length} bytes of binary data ]</div>`;
-            }
-            else if (stream.length > 32 * 1024) {
-              html += `<div class="stream-placeholder data">[ ${stream.length} bytes of text data ]</div>`;
-            }
-            else {
-              html += `<div class="data stream-data">${h(String.fromCharCode.apply(null, stream))}</div>`;
-            }
-          }
-
-          html += `
-            <div class="header object-footer">
-              endobj
-            </div>
-          `;
-
-          render('object', html);
-        }
-        else if (c === '%') {
-          const comment = pdf.readLine();
-
-          let matches;
-          matches = comment.match(/^%PDF-([0-9.]+)$/);
-          if (matches) {
-            render('explanation', `This is a PDF version ${matches[1]} compliant file`);
-          }
-          else if (comment.match(/^%[\x80-\xff]{4}$/)) {
-            render('explanation', 'This comment marks that there is binary data contained in this file');
-          }
-          else if (comment === '%%EOF') {
-            render('explanation', 'This marks the end of the document, although may be appended to after this point with more PDF content');
-          }
-
-          render('comment', h(comment));
-        }
-        else {
-          const keyword = pdf.readKeyword();
-          let html;
-
-          switch (keyword) {
-            case 'endobj':
-              break;
-
-            case 'xref':
-              const table = parseXref(pdf);
-              let xrefHtml = '';
-              for (const {startObject, count, xrefs} of table) {
-                xrefHtml += `<div class="xref-section-header">${startObject} ${count}</div><ul class="xref-section">`;
-                for (const {offset, generation, inUseFlag} of xrefs) {
-                  xrefHtml += `<li>${offset} ${generation} ${inUseFlag}`;
-                }
-                xrefHtml += '</ul>';
-              }
-
-              html = `
-                <div class="header xref-header">xref</div>
-                <div class="data xref-data">
-                ${xrefHtml}
-                </div>
-              `;
-
-              render('xref', html);
-              break;
-
-            case 'trailer':
-              const trailer = parseObject(pdf);
-              html = `
-                <div class="header trailer-header">trailer</div>
-                <div class="data trailer-data">
-                  ${renderObject(trailer)}
-                </div>
-              `;
-              render('trailer', html);
-              break;
-
-            case 'startxref':
-              const startxref = parseObject(pdf);
-              html = `
-                <div class="explanation">Points to the last cross-reference table which stores object offsets</div>
-                <div class="header startxref-header">startxref</div>
-                <div class="data startxref-data">
-                  <a href="#offset${startxref.number}">
-                    ${renderObject(startxref)}
-                  </a>
-                </div>
-              `;
-              render('startxref', html);
-              break;
-
-            default:
-              throw `unknown keyword ${keyword} at position ${pdf.position}`;
-          }
-        }
-      }
-      console.log('--end parse--');
+      displayPDF(filename, new Uint8Array(this.result));
     }
 
     reader.readAsArrayBuffer(fileElement.files[0]);

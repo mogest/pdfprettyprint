@@ -1,6 +1,7 @@
 body {
   font-family: sans-serif;
   background: #222226;
+  margin: 0;
 }
 
 html, body {
@@ -33,6 +34,11 @@ input[type=file] {
 section#viewer {
   display: none;
   height: 100%;
+}
+
+.viewer-header {
+  background: #aaa;
+  padding: 1rem;
 }
 
 .code {
@@ -118,3 +124,4 @@ a {
 .inline-explanation {
   color: #777;
 }
+
