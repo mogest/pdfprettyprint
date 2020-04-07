@@ -205,7 +205,7 @@ window.addEventListener('load', () => {
     [INDIRECT_REFERENCE_OBJECT]: "indirect reference",
   };
 
-  function parseDictionary(pdf, keyContext) {
+  function parseDictionary(pdf, context = {}) {
     const dictionary = [];
 
     while (true) {
@@ -221,11 +221,11 @@ window.addEventListener('load', () => {
         throw `dictionary can only have name objects for keys at offset ${pdf.offset}`;
       }
 
-      if (!keyContext && keyToTypeMap[key.name]) {
-        keyContext = key.name;
+      if (!context.keyContext && keyToTypeMap[key.name]) {
+        context.keyContext = key.name;
       }
 
-      const value = parseObject(pdf, keyContext);
+      const value = parseObject(pdf, context);
 
       dictionary.push([key, value]);
     }
@@ -308,7 +308,7 @@ window.addEventListener('load', () => {
     }
   }
 
-  function parseArray(pdf, keyContext) {
+  function parseArray(pdf, context) {
     const array = [];
 
     while (true) {
@@ -318,12 +318,12 @@ window.addEventListener('load', () => {
         return {type: ARRAY_OBJECT, array};
       }
 
-      const object = parseObject(pdf, keyContext);
+      const object = parseObject(pdf, context);
       array.push(object);
     }
   }
 
-  function parseNumberOrReference(pdf, allowReference = true, keyContext) {
+  function parseNumberOrReference(pdf, {allowReference = true, keyContext, number: sourceNumber, generation: sourceGeneration}) {
     let string = "";
     let dotFlag = false;
 
@@ -352,13 +352,26 @@ window.addEventListener('load', () => {
             if (WHITESPACE_CHARACTERS.includes(c)) {
               pdf.skipSpaceChars();
               if (pdf.readChar() === 'R') {
+                const generation = parseInt(generationString);
                 const typeHint = keyToTypeMap[keyContext];
 
                 if (typeHint) {
-                  objectTypeHints[number] = typeHint;
+                  objectTypeHints[`${number}x${generation}`] = typeHint;
                 }
 
-                return {type: INDIRECT_REFERENCE_OBJECT, objectNumber: number, generation: parseInt(generationString)};
+                if (sourceNumber) {
+                  const key = `${number}x${generation}`;
+                  const referenceList = references[key];
+                  const data = {number: sourceNumber, generation: sourceGeneration};
+                  if (referenceList) {
+                    referenceList.push(data);
+                  }
+                  else {
+                    references[key] = [data];
+                  }
+                }
+
+                return {type: INDIRECT_REFERENCE_OBJECT, objectNumber: number, generation};
               }
               break;
             }
@@ -446,8 +459,8 @@ window.addEventListener('load', () => {
 
     const [_, number, generation] = matches;
 
-    const object = parseObject(pdf);
-    let stream, streamOffset;
+    const object = parseObject(pdf, {number, generation});
+    let stream;
 
     pdf.skipSpaceChars();
     if (object.type === DICTIONARY_OBJECT && pdf.peekChars(6) === 'stream') {
@@ -461,11 +474,10 @@ window.addEventListener('load', () => {
         throw `stream keyword must be followed by either a line feed or a carriage return and line feed at offset ${pdf.offset}`;
       }
 
-      streamOffset = pdf.offset;
       stream = readStream(pdf, object);
     }
 
-    return {number, generation, object, stream, offset, streamOffset};
+    return {number, generation, object, stream, offset};
   }
 
   function findValueByKey(object, keyName) {
@@ -478,7 +490,7 @@ window.addEventListener('load', () => {
     }
   }
 
-  function parseObject(pdf, keyContext) {
+  function parseObject(pdf, context = {}) {
     const c1 = pdf.readNonSpaceChar();
 
     switch (c1) {
@@ -486,7 +498,7 @@ window.addEventListener('load', () => {
         const c2 = pdf.peekChar();
         if (c2 === '<') {
           pdf.advance(1);
-          return parseDictionary(pdf, keyContext);
+          return parseDictionary(pdf, context);
         }
         else {
           return parseHexString(pdf);
@@ -519,12 +531,12 @@ window.addEventListener('load', () => {
         return parseName(pdf);
 
       case '[':
-        return parseArray(pdf, keyContext);
+        return parseArray(pdf, context);
     }
 
     if ("-+0123456789.".includes(c1)) {
       pdf.rewind();
-      return parseNumberOrReference(pdf, true, keyContext);
+      return parseNumberOrReference(pdf, context);
     }
 
     throw `unknown character ${c1} at offset ${pdf.offset}`;
@@ -791,7 +803,7 @@ window.addEventListener('load', () => {
             streamPdf.rewind();
 
             if ("0123456789-+.".includes(c)) {
-              args.push(parseNumberOrReference(streamPdf, false));
+              args.push(parseNumberOrReference(streamPdf, {allowReference: false}));
             }
             else {
               const command = streamPdf.readKeyword();
@@ -979,13 +991,6 @@ window.addEventListener('load', () => {
     code.appendChild(div);
   }
 
-  const keyToTypeMap = {
-    Contents: 'Content',
-    XObject: 'XObject',
-  };
-
-  const objectTypeHints = {};
-
   function validateFileHeader(pdf) {
     pdf.seek(0);
     line = pdf.readLine();
@@ -1090,10 +1095,7 @@ window.addEventListener('load', () => {
   }
 
   function renderObjectTypeExplanation(type) {
-    const description = TYPE_DESCRIPTIONS[type];
-    if (description) {
-      return `<div>${description}</div>`;
-    }
+    return TYPE_DESCRIPTIONS[type];
   }
 
   const TYPE_DESCRIPTIONS = {
@@ -1103,10 +1105,24 @@ window.addEventListener('load', () => {
     XRef: 'The XRef object provides a lookup table for objects so they can be quickly found',
     ObjStm: 'The ObjStm (object stream) object contains multiple objects compressed in its stream data',
     XObject: 'The XObject object holds graphics content that can be reused multiple times',
-    Content: 'This object contains graphical content',
+    Content: 'This stream contains graphical operations',
+    Font: 'The Font object defines a font',
+    FontDescriptor: "The FontDescriptor object defines a font's metrics other than its glyph widths",
+    FontFile: 'A stream containing a "Type 1" font program',
+    FontFile2: 'A stream containing a TrueType font program',
   };
 
+  const keyToTypeMap = {
+    Contents: 'Content',
+    XObject: 'XObject',
+    Font: 'Font',
+    FontFile: 'FontFile',
+    FontFile2: 'FontFile2',
+  };
+
+  const objectTypeHints = {};
   const unidentifiedObjects = [];
+  const references = {};
 
   function displayPDF(filename, array) {
     const pdf = new PdfBuffer(array);
@@ -1122,20 +1138,20 @@ window.addEventListener('load', () => {
 
       let objectDescription = '';
       if ("0123456789".includes(c)) {
-        const {number, generation, object, stream, offset, streamOffset} = readObject(pdf);
+        const {number, generation, object, stream, offset} = readObject(pdf);
 
-        let dictionaryType;
+        let type;
         if (object.type === DICTIONARY_OBJECT) {
-          dictionaryType = extractName(dereference(pdf, findValueByKey(object, 'Type')));
+          type = extractName(dereference(pdf, findValueByKey(object, 'Type')));
         }
-        if (dictionaryType) {
+        if (type) {
           const subtype = extractName(dereference(pdf, findValueByKey(object, 'Subtype')));
-          if (subtype) { dictionaryType += `/${subtype}`; }
+          if (subtype) { type += `/${subtype}`; }
         }
-        if (!dictionaryType) { dictionaryType = objectTypeHints[number]; }
+        if (!type) { type = objectTypeHints[`${number}x${generation}`]; }
 
-        if (!dictionaryType) {
-          unidentifiedObjects.push({number, offset, streamOffset});
+        if (!type) {
+          unidentifiedObjects.push({number, generation, offset});
         }
 
         let html = `
@@ -1143,7 +1159,10 @@ window.addEventListener('load', () => {
           <a id="object${number}x${generation}"></a>
           <div class="explanation">
             Define object number ${number}, generation ${generation}, at offset ${offset}
-            ${renderObjectTypeExplanation(dictionaryType) || ''}
+            <div id="object${number}x${generation}-type-explanation">
+              ${renderObjectTypeExplanation(type) || ''}
+            </div>
+            <div id="object${number}x${generation}-references" class="references"></div>
           </div>
           <div class="header object-header">
             ${number} ${generation} obj
@@ -1154,7 +1173,11 @@ window.addEventListener('load', () => {
         `;
 
         if (stream) {
-          html += renderStream({object, stream, type: dictionaryType});
+          html += `
+            <div id="stream${number}x${generation}">
+              ${renderStream({object, stream, type})}
+            </div>
+          `;
         }
 
         html += `
@@ -1244,6 +1267,30 @@ window.addEventListener('load', () => {
           default:
             throw `unknown keyword ${keyword} at offset ${pdf.offset}`;
         }
+      }
+    }
+
+    for (const {number, generation, offset} of unidentifiedObjects) {
+      const type = objectTypeHints[`${number}x${generation}`];
+
+      if (type) {
+        document.getElementById(`object${number}x${generation}-type-explanation`).innerHTML = renderObjectTypeExplanation(type);
+
+        // TODO : if it's any stream that we have a special renderer for (at the moment we only have this one)
+        if (['Content', 'XObject'].includes(type)) {
+          pdf.seek(offset);
+          const {stream} = readObject(pdf);
+          document.getElementById(`stream${number}x${generation}`).innerHTML = renderGraphicsObject(stream);
+        }
+      }
+    }
+
+    for (const source of Object.keys(references)) {
+      const referenceList = references[source];
+      const element = document.getElementById(`object${source}-references`);
+
+      if (element) {
+        element.innerHTML = "Referenced by " + referenceList.map(({number, generation}) => `<a href="#object${number}x${generation}">${number} ${generation}</a>`).join(' ');
       }
     }
 
