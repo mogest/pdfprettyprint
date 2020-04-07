@@ -92,6 +92,10 @@ window.addEventListener('load', () => {
       return subarray;
     }
 
+    readBytesAt(position, count) {
+      return this.array.subarray(position, position + count);
+    }
+
     readNumber(bytes) {
       let number = 0;
 
@@ -221,11 +225,12 @@ window.addEventListener('load', () => {
         throw `dictionary can only have name objects for keys at offset ${pdf.offset}`;
       }
 
+      let objectContext = context;
       if (!context.keyContext && keyToTypeMap[key.name]) {
-        context = Object.assign({}, context, {keyContext: key.name});
+        objectContext = Object.assign({}, context, {keyContext: key.name});
       }
 
-      const value = parseObject(pdf, context);
+      const value = parseObject(pdf, objectContext);
 
       dictionary.push([key, value]);
     }
@@ -1006,14 +1011,28 @@ window.addEventListener('load', () => {
     }
   }
 
-  function getStartxref(pdf) {
+  function findEndOfFile(pdf) {
     pdf.seekToEnd();
-    const lastLine = pdf.readLineBackwards();
-    if (lastLine !== '%%EOF') {
-      console.log('last line is', lastLine);
-      throw "Doesn't end with %%EOF";
-    }
 
+    while (true) {
+      while (pdf.peekChar() !== 'F') {
+        if (pdf.offset === 0) {
+          throw "Couldn't find %%EOF marker anywhere in the file";
+        }
+
+        pdf.offset--;
+      }
+
+      if (arrayToString(pdf.readBytesAt(pdf.offset - 4, 5)) === '%%EOF') {
+        pdf.advance(-5);
+        return pdf.offset + 6;
+      }
+
+      pdf.offset--;
+    }
+  }
+
+  function getStartxref(pdf) {
     let startxref = parseInt(pdf.readLineBackwards());
     const startxrefkeyword = pdf.readLineBackwards();
 
@@ -1101,22 +1120,26 @@ window.addEventListener('load', () => {
   }
 
   function renderObjectTypeExplanation(type) {
-    return TYPE_DESCRIPTIONS[type];
+    if (type) {
+      return `${h(type)}: ${TYPE_DESCRIPTIONS[type]}`;
+    }
   }
 
   const TYPE_DESCRIPTIONS = {
-    Catalog: 'The Catalog object sits at the root of the document and points to its pages object',
-    Pages: 'The Pages object points to the individual pages in this document',
-    Page: 'The Page object sets up the resources for a page and points to its graphical content',
-    XRef: 'The XRef object provides a lookup table for objects so they can be quickly found',
-    ObjStm: 'The ObjStm (object stream) object contains multiple objects compressed in its stream data',
-    XObject: 'The XObject object holds graphics content that can be reused multiple times',
-    "XObject/Form": 'The XObject object holds graphics content that can be reused multiple times',
-    Content: 'This stream contains graphical operations',
-    Font: 'The Font object defines a font',
-    FontDescriptor: "The FontDescriptor object defines a font's metrics other than its glyph widths",
-    FontFile: 'A stream containing a "Type 1" font program',
-    FontFile2: 'A stream containing a TrueType font program',
+    Catalog: 'Root of the document, point to pages object',
+    Pages: 'Points to the individual pages in this document',
+    Page: 'Defines page resources and points to page graphical content',
+    XRef: 'Provides a lookup table for objects so they can be quickly found',
+    ObjStm: 'Holds multiple objects compressed in the stream data',
+    XObject: 'Graphics content that can be reused multiple times',
+    "XObject/Form": 'Graphical operations that can be reused multiple times',
+    "XObject/Image": 'Image that can be reused multiple times',
+    Content: 'Graphical operations stream',
+    Font: 'Font definition',
+    "Font/TrueType": 'TrueType font definition',
+    FontDescriptor: 'Font metrics',
+    FontFile: 'Type 1 font data',
+    FontFile2: 'TrueType font data',
   };
 
   const keyToTypeMap = {
@@ -1134,6 +1157,7 @@ window.addEventListener('load', () => {
   function displayPDF(filename, array) {
     const pdf = new PdfBuffer(array);
 
+    const eofOffset = findEndOfFile(pdf);
     const startxref = getStartxref(pdf);
     pdf.xrefTable = loadXrefTables(pdf, startxref);
 
@@ -1207,7 +1231,14 @@ window.addEventListener('load', () => {
           render('explanation', 'This comment marks that there is binary data contained in this file');
         }
         else if (comment === '%%EOF') {
-          render('explanation', 'This marks the end of the document, although may be appended to after this point with more PDF content');
+          if (pdf.offset >= eofOffset) {
+            render('explanation', 'This marks the end of the document');
+            render('comment', h(comment));
+            break;
+          }
+          else {
+            render('explanation', 'This is not the last %%EOF in this PDF document, so is ignored');
+          }
         }
 
         render('comment', h(comment));
@@ -1258,13 +1289,18 @@ window.addEventListener('load', () => {
             break;
 
           case 'startxref':
-            const startxref = parseObject(pdf);
+            const object = parseObject(pdf);
+
+            const explanation = object.number === startxref ?
+              'Points to the last cross-reference table which stores object offsets' :
+              'This is not the last startxref in the document, so is ignored';
+
             html = `
-              <div class="explanation">Points to the last cross-reference table which stores object offsets</div>
+              <div class="explanation">${explanation}</div>
               <div class="header startxref-header">startxref</div>
               <div class="data startxref-data">
-                <a href="#offset${startxref.number}">
-                  ${renderObject(startxref)}
+                <a href="#offset${object.number}">
+                  ${renderObject(object)}
                 </a>
               </div>
             `;
@@ -1274,6 +1310,23 @@ window.addEventListener('load', () => {
           default:
             throw `unknown keyword ${keyword} at offset ${pdf.offset}`;
         }
+      }
+    }
+
+    if (!pdf.eof()) {
+      const ignoredData = arrayToString(pdf.readBytes(pdf.length - pdf.offset));
+
+      if (!ignoredData.match(/^\s*$/)) {
+        const html = `
+          <div class="inline-explanation">
+            % The following data at the end of the file is not considered part of the PDF
+          </div>
+          <div class="ignored-data">
+            ${h(ignoredData)}
+          </div>
+        `
+
+        render('ignored', html);
       }
     }
 

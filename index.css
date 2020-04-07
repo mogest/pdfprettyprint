@@ -137,3 +137,11 @@ a {
 .references a {
   color: inherit;
 }
+
+.ignored {
+  margin: 1rem 0;
+}
+
+.ignored-data {
+  color: #444;
+}
