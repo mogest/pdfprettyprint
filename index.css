@@ -32,6 +32,20 @@ section#upload p {
   font-size: 10pt;
 }
 
+section#upload .source {
+  position: absolute;
+  text-align: center;
+  bottom: 1rem;
+}
+
+section#upload .source a {
+  color: #555;
+  transition: color 0.25s;
+}
+section#upload .source a:hover {
+  color: #888;
+}
+
 .upload-button:hover {
   background: #68a;
 }
@@ -51,7 +65,8 @@ section#viewer {
 }
 
 .code {
-  font-family: monospace;
+  font-family: "Roboto Mono", monospace;
+  font-size: 9pt;
   margin: 1rem;
   color: #ccc;
 }
@@ -113,10 +128,16 @@ ul.array-items.singleline li {
   color: #bbb;
 }
 
+.explanation, .inline-explanation {
+  font-family: "Open Sans", sans-serif;
+  font-size: 10pt;
+  line-height: 1.2;
+  color: #666;
+}
+
 .explanation {
   float: right;
   text-align: right;
-  color: #777;
 }
 
 a {
@@ -130,12 +151,13 @@ a {
   margin-top: 1rem;
 }
 
-.inline-explanation {
-  color: #777;
-}
-
 .references a {
   color: inherit;
+  transition: color 0.25s;
+}
+
+.references a:hover {
+  color: #999;
 }
 
 .ignored {

@@ -19,6 +19,7 @@ const DELIMITER_AND_WHITESPACE_CHARACTERS = DELIMITER_CHARACTERS + WHITESPACE_CH
 
 window.addEventListener('load', () => {
   const fileElement = document.getElementById('file');
+  const codeElement = document.querySelector('section#viewer .code');
 
   function arrayToString(array) {
     return String.fromCharCode.apply(null, array);
@@ -993,13 +994,20 @@ window.addEventListener('load', () => {
     }
   }
 
-  function render(className, html) {
+  function appendDiv(className, html, fragment) {
     const div = document.createElement('div');
     div.className = className;
     div.innerHTML = html;
 
-    const code = document.querySelector('section#viewer .code');
-    code.appendChild(div);
+    if (fragment) {
+      const a = document.createElement('a');
+      a.id = fragment;
+      a.appendChild(div);
+      codeElement.appendChild(a);
+    }
+    else {
+      codeElement.appendChild(div);
+    }
   }
 
   function validateFileHeader(pdf) {
@@ -1187,7 +1195,6 @@ window.addEventListener('load', () => {
 
         let html = `
           <a id="offset${offset}"></a>
-          <a id="object${number}x${generation}"></a>
           <div class="explanation">
             Define object number ${number}, generation ${generation}, at offset ${offset}
             <div id="object${number}x${generation}-type-explanation">
@@ -1217,7 +1224,7 @@ window.addEventListener('load', () => {
           </div>
         `;
 
-        render('object', html);
+        appendDiv('object', html, `object${number}x${generation}`);
       }
       else if (c === '%') {
         const comment = pdf.readLine();
@@ -1225,23 +1232,23 @@ window.addEventListener('load', () => {
         let matches;
         matches = comment.match(/^%PDF-([0-9.]+)$/);
         if (matches) {
-          render('explanation', `This is a PDF version ${matches[1]} compliant file`);
+          appendDiv('explanation', `This is a PDF version ${matches[1]} compliant file`);
         }
         else if (comment.match(/^%[\x80-\xff]{4}$/)) {
-          render('explanation', 'This comment marks that there is binary data contained in this file');
+          appendDiv('explanation', 'This comment signals that there is binary data contained in this file');
         }
         else if (comment === '%%EOF') {
           if (pdf.offset >= eofOffset) {
-            render('explanation', 'This marks the end of the document');
-            render('comment', h(comment));
+            appendDiv('explanation', 'This marks the end of the document');
+            appendDiv('comment', h(comment));
             break;
           }
           else {
-            render('explanation', 'This is not the last %%EOF in this PDF document, so is ignored');
+            appendDiv('explanation', 'This is not the last %%EOF in this PDF document, so is ignored');
           }
         }
 
-        render('comment', h(comment));
+        appendDiv('comment', h(comment));
       }
       else {
         const keyword = pdf.readKeyword();
@@ -1255,37 +1262,49 @@ window.addEventListener('load', () => {
             const table = parseXref(pdf);
             let xrefHtml = '';
             for (const {startObject, count, xrefs} of table) {
+              let number = startObject;
+
               xrefHtml += `<div class="xref-section-header">${startObject} ${count}</div><ul class="xref-section">`;
+
               for (const {offset, generation, inUseFlag} of xrefs) {
                 if (inUseFlag) {
-                  xrefHtml += `<li><a href="#offset${offset.replace(/^0+/, '')}">${offset}</a> ${generation} n`;
+                  const offsetInt = offset.replace(/^0+/, '');
+
+                  xrefHtml += `<li class="explanation">object ${number} is at offset ${offsetInt}</li>`;
+                  xrefHtml += `<li><a href="#offset${offsetInt}">${offset}</a> ${generation} n`;
                 }
                 else {
+                  xrefHtml += `<li class="explanation">object ${number} is unused</li>`;
                   xrefHtml += `<li>${offset} ${generation} f`;
                 }
+
+                number++;
               }
+
               xrefHtml += '</ul>';
             }
 
             html = `
+              <div class="explanation">Provides a lookup table for objects so they can be quickly found</div>
               <div class="header xref-header">xref</div>
               <div class="data xref-data">
               ${xrefHtml}
               </div>
             `;
 
-            render('xref', html);
+            appendDiv('xref', html);
             break;
 
           case 'trailer':
             const trailer = parseObject(pdf);
             html = `
+              <div class="explanation">Points to the document root node and provides document information</div>
               <div class="header trailer-header">trailer</div>
               <div class="data trailer-data">
                 ${renderObject(trailer)}
               </div>
             `;
-            render('trailer', html);
+            appendDiv('trailer', html);
             break;
 
           case 'startxref':
@@ -1304,7 +1323,7 @@ window.addEventListener('load', () => {
                 </a>
               </div>
             `;
-            render('startxref', html);
+            appendDiv('startxref', html);
             break;
 
           default:
@@ -1326,7 +1345,7 @@ window.addEventListener('load', () => {
           </div>
         `
 
-        render('ignored', html);
+        appendDiv('ignored', html);
       }
     }
 
