@@ -1,3 +1,18 @@
+/*
+ * PDF Pretty Print
+ * Copyright 2020 Roger Nesbitt
+ * Licensed under an MIT licence
+ *
+ * Welcome to the source code!  Yep, it's a single handrolled file.
+ *
+ * This is how I get a project out.  Slam it all in a single file, see if it works, and when it is
+ * working well then refactor it, introduce a build system, and all those other time consuming
+ * parts.
+ *
+ * Apologies in the meantime if you're trying to make sense of it :)  Get in touch on GitHub if
+ * you'd like to participate, there's a lot to do.
+ */
+
 const WHITESPACE_CHARACTERS = "\x00\t\n\x0c\r ";
 const DELIMITER_CHARACTERS = "()<>[]{}/%";
 const DELIMITER_AND_WHITESPACE_CHARACTERS = DELIMITER_CHARACTERS + WHITESPACE_CHARACTERS;
@@ -98,17 +113,19 @@ window.addEventListener('load', () => {
       this.skipSpaceChars();
 
       let c, keyword = '';
-      do {
+      while (true) {
         c = this.readChar();
-        if (DELIMITER_AND_WHITESPACE_CHARACTERS.includes(c)) {
+
+        if (!c || DELIMITER_AND_WHITESPACE_CHARACTERS.includes(c)) {
           if (c === '\r' && this.peekChar() === '\n') {
             this.offset++;
           }
           break;
         }
+
         keyword += c;
       }
-      while (c);
+
       return keyword;
     }
 
@@ -225,9 +242,11 @@ window.addEventListener('load', () => {
       else if (c === '>') {
         return {type: HEX_STRING_OBJECT, string};
       }
+      else if (!c) {
+        throw `unexpected end of data at offset ${pdf.offset}`;
+      }
       else {
-        console.log(c, string);
-        throw `invalid character in hex string at offset ${pdf.offset}`;
+        throw `invalid character ${c} in hex string at offset ${pdf.offset}`;
       }
     }
   }
@@ -367,7 +386,12 @@ window.addEventListener('load', () => {
     let maxReferences = 100;
 
     while (object && object.type === INDIRECT_REFERENCE_OBJECT && maxReferences--) {
-      object = findObject(pdf, object.objectNumber).object;
+      const result = findObject(pdf, object.objectNumber);
+      if (!result) {
+        throw `Trying to look up indirect reference for object ${object.objectNumber} but couldn't find that object in the xref tables`;
+      }
+
+      object = result.object;
     }
 
     return object;
@@ -833,7 +857,7 @@ window.addEventListener('load', () => {
 
       case ARRAY_OBJECT:
         const array = object.array.map(value => `<li>${renderObject(value)}</li>`).join("");
-        const lineClass = array.replace(/<[^>]+>/g, '').length > 20 ? 'multiline' : 'singleline';
+        const lineClass = (object.array[0] && object.array[0].type !== NUMBER_OBJECT) && array.replace(/<[^>]+>/g, '').length > 20 ? 'multiline' : 'singleline';
         return `
           <span class="array-object">
             <span class="array-marker">[</span>
@@ -861,67 +885,76 @@ window.addEventListener('load', () => {
     const index = extractArrayOfNumbers(findValueByKey(object, 'Index')) || [0, size];
     const prev = extractNumber(findValueByKey(object, 'Prev'));
 
-    if (!size) { throw 'Size cannot be undefined for XRef objects'; }
-    if (!w) { throw 'W cannot be undefined for XRef objects'; }
-    if (w.length !== 3) { throw 'W must be three numbers long for XRef objects'; }
-    if (index.length !== 2) { throw 'Index must be two numbers long for XRef objects'; }
-
-    const [startObject, count] = index;
-    const xref = [];
+    if (!size) { throw 'Size must be a number for XRef objects'; }
+    if (!w) { throw 'W must be an array of numbers for XRef objects'; }
+    if (w.length !== 3) { throw 'W must have an array of three numbers for XRef objects'; }
+    if (index.length === 0 || index.length % 2 !== 0) { throw 'There must be a positive even number of elements in the Index array for XRef objects'; }
 
     const streamBuffer = new PdfBuffer(stream);
+    const table = [];
 
-    for (let i = 0; i < count; i++) {
-      const type = w[0] ? streamBuffer.readNumber(w[0]) : 1;
+    for (let indexIndex = 0; indexIndex < index.length; indexIndex += 2) {
+      const startObject = index[indexIndex];
+      const count       = index[indexIndex + 1];
+      const xref        = [];
 
-      switch (type) {
-        case 0:
-          const nextFreeObject = w[1] ? streamBuffer.readNumber(w[1]) : 0;
-          const nextGeneration = w[2] ? streamBuffer.readNumber(w[2]) : 65536;
-          xref.push({offset: nextFreeObject, generation: nextGeneration, inUseFlag: false});
-          break;
+      for (let i = 0; i < count; i++) {
+        const type = w[0] ? streamBuffer.readNumber(w[0]) : 1;
 
-        case 1:
-          const offset = w[1] ? streamBuffer.readNumber(w[1]) : 0;
-          const generation = w[2] ? streamBuffer.readNumber(w[2]) : 0;
-          xref.push({offset, generation, inUseFlag: true});
-          break;
+        switch (type) {
+          case 0:
+            const nextFreeObject = w[1] ? streamBuffer.readNumber(w[1]) : 0;
+            const nextGeneration = w[2] ? streamBuffer.readNumber(w[2]) : 65536;
+            xref.push({offset: nextFreeObject, generation: nextGeneration, inUseFlag: false});
+            break;
 
-        case 2:
-          const number = w[1] ? streamBuffer.readNumber(w[1]) : 0;
-          const index = w[2] ? streamBuffer.readNumber(w[2]) : 0;
-          xref.push({number, index, inUseFlag: true, objectStreamFlag: true});
-          break;
+          case 1:
+            const offset = w[1] ? streamBuffer.readNumber(w[1]) : 0;
+            const generation = w[2] ? streamBuffer.readNumber(w[2]) : 0;
+            xref.push({offset, generation, inUseFlag: true});
+            break;
 
-        default: // ignore
-          break;
+          case 2:
+            const number = w[1] ? streamBuffer.readNumber(w[1]) : 0;
+            const index = w[2] ? streamBuffer.readNumber(w[2]) : 0;
+            xref.push({number, index, inUseFlag: true, objectStreamFlag: true});
+            break;
+
+          default: // ignore
+            break;
+        }
       }
+
+      table.push({startObject, count, xref});
     }
 
-    return {xrefs: {startObject, count, xref}, prev};
+    return {xrefs: table, prev};
   }
 
   function renderXrefStream({object, stream}) {
     try {
-      const {xrefs} = parseXrefStream({object, stream});
+      const {xrefs: table} = parseXrefStream({object, stream});
       let html = '';
 
-      let objectNumber = xrefs.startObject;
-      for (const xref of xrefs.xref) {
-        let line;
+      for (const xrefs of table) {
+        let objectNumber = xrefs.startObject;
 
-        if (!xref.inUseFlag) {
-          line = `object ${objectNumber} is not in use; next free object at ${xref.offset}, next generation will be ${xref.generation}`;
-        }
-        else if (!xref.objectStreamFlag) {
-          line = `object ${objectNumber} is at <a href="#offset${xref.offset}">offset ${xref.offset}</a> in generation ${xref.generation}`;
-        }
-        else {
-          line = `object ${objectNumber} is inside <a href="#object${xref.number}x0">object stream ${xref.number}</a> at index ${xref.index}`;
-        }
+        for (const xref of xrefs.xref) {
+          let line;
 
-        html += `<li>${line}</li>`;
-        objectNumber++;
+          if (!xref.inUseFlag) {
+            line = `object ${objectNumber} is not in use; next free object at ${xref.offset}, next generation will be ${xref.generation}`;
+          }
+          else if (!xref.objectStreamFlag) {
+            line = `object ${objectNumber} is at <a href="#offset${xref.offset}">offset ${xref.offset}</a> in generation ${xref.generation}`;
+          }
+          else {
+            line = `object ${objectNumber} is inside <a href="#object${xref.number}x0">object stream ${xref.number}</a> at index ${xref.index}`;
+          }
+
+          html += `<li>${line}</li>`;
+          objectNumber++;
+        }
       }
 
       return `
@@ -932,6 +965,7 @@ window.addEventListener('load', () => {
       `;
     }
     catch (e) {
+      console.error(e);
       return '<div class="error">error parsing XRef stream data</div>';
     }
   }
@@ -979,10 +1013,12 @@ window.addEventListener('load', () => {
     if (startxref < 1) {
       throw "Invalid startxref number";
     }
+
+    return startxref;
   }
 
   function loadXrefTables(pdf, startxref) {
-    const table = [];
+    let table = [];
 
     while (startxref) {
       pdf.seek(startxref);
@@ -1013,7 +1049,7 @@ window.addEventListener('load', () => {
         }
 
         const {xrefs, prev} = parseXrefStream({object, stream});
-        table.push(xrefs);
+        table = table.concat(xrefs);
 
         startxref = prev;
       }
@@ -1036,6 +1072,9 @@ window.addEventListener('load', () => {
     }
     else if (['Content', 'XObject'].includes(type)) {
       html += renderGraphicsObject(stream);
+    }
+    else if (type === 'XObject/Image') {
+      html += `<div class="stream-placeholder data">[ image data ]</div>`;
     }
     else if (stream.some(x => x > 127)) {
       html += `<div class="stream-placeholder data">[ ${stream.length} bytes of binary data ]</div>`;
@@ -1072,10 +1111,6 @@ window.addEventListener('load', () => {
   function displayPDF(filename, array) {
     const pdf = new PdfBuffer(array);
 
-    document.querySelector('section#upload').style.display = 'none';
-    document.querySelector('section#viewer').style.display = 'block';
-    document.querySelector('#filename').innerText = filename;
-
     const startxref = getStartxref(pdf);
     pdf.xrefTable = loadXrefTables(pdf, startxref);
 
@@ -1093,6 +1128,10 @@ window.addEventListener('load', () => {
         if (object.type === DICTIONARY_OBJECT) {
           dictionaryType = extractName(dereference(pdf, findValueByKey(object, 'Type')));
         }
+        if (dictionaryType) {
+          const subtype = extractName(dereference(pdf, findValueByKey(object, 'Subtype')));
+          if (subtype) { dictionaryType += `/${subtype}`; }
+        }
         if (!dictionaryType) { dictionaryType = objectTypeHints[number]; }
 
         if (!dictionaryType) {
@@ -1104,7 +1143,7 @@ window.addEventListener('load', () => {
           <a id="object${number}x${generation}"></a>
           <div class="explanation">
             Define object number ${number}, generation ${generation}, at offset ${offset}
-            ${renderObjectTypeExplanation(dictionaryType)}
+            ${renderObjectTypeExplanation(dictionaryType) || ''}
           </div>
           <div class="header object-header">
             ${number} ${generation} obj
@@ -1213,12 +1252,17 @@ window.addEventListener('load', () => {
 
   document.querySelector('input').addEventListener('change', event => {
     const filename = event.target.files[0].name;
+
+    document.querySelector('section#upload').style.display = 'none';
+    document.querySelector('section#viewer').style.display = 'block';
+    document.querySelector('#filename').innerText = filename;
+
     const reader = new FileReader();
 
     reader.onload = function() {
       displayPDF(filename, new Uint8Array(this.result));
     }
 
-    reader.readAsArrayBuffer(fileElement.files[0]);
+    setTimeout(() => reader.readAsArrayBuffer(fileElement.files[0]), 0);
   });
 });
