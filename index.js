@@ -222,7 +222,7 @@ window.addEventListener('load', () => {
       }
 
       if (!context.keyContext && keyToTypeMap[key.name]) {
-        context.keyContext = key.name;
+        context = Object.assign({}, context, {keyContext: key.name});
       }
 
       const value = parseObject(pdf, context);
@@ -308,7 +308,7 @@ window.addEventListener('load', () => {
     }
   }
 
-  function parseArray(pdf, context) {
+  function parseArray(pdf, context = {}) {
     const array = [];
 
     while (true) {
@@ -545,7 +545,13 @@ window.addEventListener('load', () => {
   function applyFilter(data, filter) {
     switch (filter) {
       case 'FlateDecode':
-        return pako.inflate(data);
+        try {
+          return pako.inflate(data);
+        }
+        catch (e) {
+          var enc = new TextEncoder();
+          return enc.encode(`(error: ${e})`);
+        }
 
       default:
         var enc = new TextEncoder();
@@ -869,7 +875,7 @@ window.addEventListener('load', () => {
 
       case ARRAY_OBJECT:
         const array = object.array.map(value => `<li>${renderObject(value)}</li>`).join("");
-        const lineClass = (object.array[0] && object.array[0].type !== NUMBER_OBJECT) && array.replace(/<[^>]+>/g, '').length > 20 ? 'multiline' : 'singleline';
+        const lineClass = (object.array[0] && object.array[0].type !== NUMBER_OBJECT) && array.replace(/<[^>]+>/g, '').length > 40 ? 'multiline' : 'singleline';
         return `
           <span class="array-object">
             <span class="array-marker">[</span>
@@ -1075,7 +1081,7 @@ window.addEventListener('load', () => {
     else if (type === 'ObjStm') {
       html += renderObjStm({object, stream});
     }
-    else if (['Content', 'XObject'].includes(type)) {
+    else if (['Content', 'XObject', 'XObject/Form'].includes(type)) {
       html += renderGraphicsObject(stream);
     }
     else if (type === 'XObject/Image') {
@@ -1105,6 +1111,7 @@ window.addEventListener('load', () => {
     XRef: 'The XRef object provides a lookup table for objects so they can be quickly found',
     ObjStm: 'The ObjStm (object stream) object contains multiple objects compressed in its stream data',
     XObject: 'The XObject object holds graphics content that can be reused multiple times',
+    "XObject/Form": 'The XObject object holds graphics content that can be reused multiple times',
     Content: 'This stream contains graphical operations',
     Font: 'The Font object defines a font',
     FontDescriptor: "The FontDescriptor object defines a font's metrics other than its glyph widths",
@@ -1277,10 +1284,12 @@ window.addEventListener('load', () => {
         document.getElementById(`object${number}x${generation}-type-explanation`).innerHTML = renderObjectTypeExplanation(type);
 
         // TODO : if it's any stream that we have a special renderer for (at the moment we only have this one)
-        if (['Content', 'XObject'].includes(type)) {
+        if (['Content', 'XObject', 'XObject/Form'].includes(type)) {
           pdf.seek(offset);
           const {stream} = readObject(pdf);
-          document.getElementById(`stream${number}x${generation}`).innerHTML = renderGraphicsObject(stream);
+          if (stream) {
+            document.getElementById(`stream${number}x${generation}`).innerHTML = renderGraphicsObject(stream);
+          }
         }
       }
     }
